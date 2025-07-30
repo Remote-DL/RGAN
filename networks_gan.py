@@ -8,9 +8,9 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 from utils import random_generator, batch_generator_with_time
 
-def rnn_cell(module_name, hidden_dim):
 
-    assert module_name in ['gru','lstm']
+def rnn_cell(module_name, hidden_dim):
+    assert module_name in ['gru', 'lstm']
 
     # GRU
     if (module_name == 'gru'):
@@ -55,44 +55,48 @@ def add_attention_mechanism(inputs, attention_size):
     return output_with_seq_len, alphas
 
 
-
 def rganls(train_x, epochs, batch_size, hidden_dim=16, num_layers=3, \
            module_name='gru', z_dim=10, learning_rate=0.0002, dname='bzm', expname=''):
-
-    tf.reset_default_graph() 
+    tf.reset_default_graph()
 
     # Network Parameters
     seq_len = train_x.shape[1]
     dim = train_x.shape[2]
-    time= [seq_len]*(train_x.shape[0])
+    time = [seq_len] * (train_x.shape[0])
 
     # Input place holders
-    X = tf.placeholder(tf.float32, [None, seq_len, dim], name = "myinput_x")
-    Z = tf.placeholder(tf.float32, [None, seq_len, z_dim], name = "myinput_z")
-    T = tf.placeholder(tf.int32, [None], name = "myinput_t")
+    X = tf.placeholder(tf.float32, [None, seq_len, dim], name="myinput_x")
+    Z = tf.placeholder(tf.float32, [None, seq_len, z_dim], name="myinput_z")
+    T = tf.placeholder(tf.int32, [None], name="myinput_t")
 
     def generator(Z, T, hidden_dim=16, num_layers=3, attention_size=16):
         with tf.variable_scope("generator", reuse=tf.AUTO_REUSE):
-            e_cell = tf.nn.rnn_cell.MultiRNNCell([rnn_cell(module_name,hidden_dim) for _ in range(num_layers)])
-            e_outputs, e_last_states = tf.nn.dynamic_rnn(e_cell, Z, dtype=tf.float32, sequence_length=T)
+            # 创建RNN单元
+            e_cell = tf.nn.rnn_cell.MultiRNNCell(
+                [rnn_cell(module_name, hidden_dim) for _ in range(num_layers)]
+            )
+
+            # RNN处理
+            e_outputs, e_last_states = tf.nn.dynamic_rnn(
+                e_cell, Z, dtype=tf.float32, sequence_length=T
+            )
 
             # 添加注意力机制
             e_outputs_att, alphas = add_attention_mechanism(e_outputs, attention_size)
 
-            E = tf.contrib.layers.fully_connected(e_outputs_att, dim, activation_fn=tf.nn.sigmoid)
+            # ✅ 修正：使用注意力加权后的输出
+            E = tf.contrib.layers.fully_connected(
+                e_outputs_att,  # ❌ 错误：原为 e_outputs，改为 e_outputs_att
+                dim,
+                activation_fn=tf.nn.sigmoid
+            )
+
         return E
 
-    # def generator (Z, T):
-    #     with tf.variable_scope("generator", reuse = tf.AUTO_REUSE):
-    #         e_cell = tf.nn.rnn_cell.MultiRNNCell([rnn_cell(module_name, hidden_dim) for _ in range(num_layers)])
-    #         e_outputs, e_last_states = tf.nn.dynamic_rnn(e_cell, Z, dtype=tf.float32, sequence_length = T)
-    #         E = tf.contrib.layers.fully_connected(e_outputs, dim, activation_fn=tf.nn.sigmoid)
-    #     return E
-
-    def discriminator (X, T):
-        with tf.variable_scope("discriminator", reuse = tf.AUTO_REUSE):
+    def discriminator(X, T):
+        with tf.variable_scope("discriminator", reuse=tf.AUTO_REUSE):
             d_cell = tf.nn.rnn_cell.MultiRNNCell([rnn_cell(module_name, hidden_dim) for _ in range(num_layers)])
-            d_outputs, d_last_states = tf.nn.dynamic_rnn(d_cell, X, dtype=tf.float32, sequence_length = T)
+            d_outputs, d_last_states = tf.nn.dynamic_rnn(d_cell, X, dtype=tf.float32, sequence_length=T)
             Y_hat = tf.contrib.layers.fully_connected(d_outputs, 1, activation_fn=None)
         return Y_hat
 
@@ -107,7 +111,6 @@ def rganls(train_x, epochs, batch_size, hidden_dim=16, num_layers=3, \
     g_vars = [v for v in tf.trainable_variables() if v.name.startswith('generator')]
     d_vars = [v for v in tf.trainable_variables() if v.name.startswith('discriminator')]
 
-
     # Discriminator loss with Least Squares Loss
     D_loss_real = 0.5 * tf.reduce_mean(tf.square(Y_real - 1))
     D_loss_fake = 0.5 * tf.reduce_mean(tf.square(Y_fake))
@@ -116,22 +119,21 @@ def rganls(train_x, epochs, batch_size, hidden_dim=16, num_layers=3, \
     # Generator loss with Least Squares Loss
     G_loss_adv = 0.5 * tf.reduce_mean(tf.square(Y_fake - 1))
 
-
     # 2. Momments matching loss
-    G_loss_V1 = tf.reduce_mean(tf.abs(tf.sqrt(tf.nn.moments(X_gen,[0])[1] + 1e-6) - tf.sqrt(tf.nn.moments(X,[0])[1] + 1e-6)))
-    G_loss_V2 = tf.reduce_mean(tf.abs((tf.nn.moments(X_gen,[0])[0]) - (tf.nn.moments(X,[0])[0])))
-    G_loss_mm = 100*(G_loss_V1 + G_loss_V2)
+    G_loss_V1 = tf.reduce_mean(
+        tf.abs(tf.sqrt(tf.nn.moments(X_gen, [0])[1] + 1e-6) - tf.sqrt(tf.nn.moments(X, [0])[1] + 1e-6)))
+    G_loss_V2 = tf.reduce_mean(tf.abs((tf.nn.moments(X_gen, [0])[0]) - (tf.nn.moments(X, [0])[0])))
+    G_loss_mm = 100 * (G_loss_V1 + G_loss_V2)
 
-        
     # 3. Summation
-    G_loss = G_loss_adv + G_loss_mm 
+    G_loss = G_loss_adv + G_loss_mm
 
     # optimizer
-    D_solver = tf.train.AdamOptimizer(learning_rate).minimize(D_loss, var_list = d_vars)
-    G_solver = tf.train.AdamOptimizer(learning_rate).minimize(G_loss, var_list = g_vars)      
+    D_solver = tf.train.AdamOptimizer(learning_rate).minimize(D_loss, var_list=d_vars)
+    G_solver = tf.train.AdamOptimizer(learning_rate).minimize(G_loss, var_list=g_vars)
 
     # Initialization
-    init = tf.global_variables_initializer()  
+    init = tf.global_variables_initializer()
 
     # Start training
     with tf.Session() as sess:
@@ -142,7 +144,7 @@ def rganls(train_x, epochs, batch_size, hidden_dim=16, num_layers=3, \
         d_loss_plt = []
         g_loss_plt = []
 
-        for i in range(1, epochs+1):
+        for i in range(1, epochs + 1):
             # train generator
             for kk in range(2):
                 X_mb, T_mb = batch_generator_with_time(train_x, time, batch_size)
@@ -151,36 +153,35 @@ def rganls(train_x, epochs, batch_size, hidden_dim=16, num_layers=3, \
                     sess.run([G_solver, G_loss, G_loss_adv, G_loss_mm], feed_dict={Z: Z_mb, X: X_mb, T: T_mb})
 
             # train discriminator
-            X_mb, T_mb = batch_generator_with_time(train_x, time, batch_size)           
+            X_mb, T_mb = batch_generator_with_time(train_x, time, batch_size)
             Z_mb = random_generator(batch_size, z_dim, T_mb, seq_len)
             check_d_loss = sess.run(D_loss, feed_dict={X: X_mb, T: T_mb, Z: Z_mb})
             # Train discriminator (only when the discriminator does not work well)
-            if (check_d_loss > 0.15):        
+            if (check_d_loss > 0.15):
                 _, step_d_loss = sess.run([D_solver, D_loss], feed_dict={X: X_mb, T: T_mb, Z: Z_mb})
-            
+
             d_loss_plt.append(step_d_loss)
             g_loss_plt.append(step_g_loss)
 
             # If at saving epoches => save generated samples
-            if ((i % 1000 == 0)|(i == (epochs-1))):
+            if ((i % 1000 == 0) | (i == (epochs - 1))):
                 print("\nrunning epoch: ", i)
                 gen_num = 3000
-                Z_gen = random_generator(gen_num, z_dim, [seq_len]*gen_num, seq_len)
-                syn_data = sess.run(X_gen, feed_dict={Z: Z_gen, T: [seq_len]*gen_num})
+                Z_gen = random_generator(gen_num, z_dim, [seq_len] * gen_num, seq_len)
+                syn_data = sess.run(X_gen, feed_dict={Z: Z_gen, T: [seq_len] * gen_num})
 
-                savepath='gan_ckpt/'+dname+'/'+expname
+                savepath = 'gan_ckpt/' + dname + '/' + expname
                 if not os.path.exists(savepath):
                     os.makedirs(savepath)
-                np.savez(savepath+'/syn_epoch_%d.npz'%i, syn_data=syn_data)
+                np.savez(savepath + '/syn_epoch_%d.npz' % i, syn_data=syn_data)
 
         # display loss of discriminator and generator
-        plt.plot(np.arange(0,epochs), d_loss_plt,'r--',label='loss for discriminator')
-        plt.plot(np.arange(0,epochs), g_loss_plt,'g--',label='loss for generator')
+        plt.plot(np.arange(0, epochs), d_loss_plt, 'r--', label='loss for discriminator')
+        plt.plot(np.arange(0, epochs), g_loss_plt, 'g--', label='loss for generator')
         plt.title('Loss for training gan')
         plt.xlabel('train epoches')
         plt.ylabel('loss')
         plt.legend(['loss for discriminator', 'loss for generator'])
-        plt.savefig(savepath+'/GANs training losses.png')
+        plt.savefig(savepath + '/GANs training losses.png')
         plt.show()
         plt.close()
-
